@@ -13,8 +13,10 @@ to use couchspray for all http requests.
 
     erlc couchspray/*.erl
     make dev
-    modify etc/couchdb/local_dev.ini and add the line
-    default_handler = {couchspray, handle_request}
+    modify etc/couchdb/local_dev.ini and add the lines
+        default_handler = {couchspray, handle_request}
+        [httpd_global_handlers]
+        _all_dbs = {couchspray, handle_all_dbs_req}
     ERL_LIBS="couchspray" utils/run -i
 
 For Couchspray to be useful, you need to start a second CouchDB node.
