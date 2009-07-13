@@ -15,7 +15,7 @@
 % line points to CouchDB's hrl file.
 -include("src/couchdb/couch_db.hrl").
 
--export([handle_request/1]).
+-export([handle_request/1, handle_all_dbs_req/1]).
 -export([lookup_node/1]).
 
 -import(couch_httpd,
@@ -24,18 +24,39 @@
     start_chunked_response/3, absolute_uri/2]).
 
 % Database request handlers
-handle_request(#httpd{path_parts=[_DbName|RestParts],method=Method,
+handle_request(#httpd{path_parts=[DbName|RestParts],method=Method,
         db_url_handlers=DbUrlHandlers}=Req)->
     case {Method, RestParts} of
     {'PUT', []} ->
-        couch_httpd_db:handle_request(Req);
+        create_db_req(Req, DbName);
     {'DELETE', []} ->
-        couch_httpd_db:handle_request(Req);
+        delete_db_req(Req, DbName);
     {_, []} ->
         do_db_req(Req, fun db_req/2);
     {_, [SecondPart|_]} ->
         Handler = couch_util:dict_find(SecondPart, DbUrlHandlers, fun db_req/2),
         do_db_req(Req, Handler)
+    end.
+
+create_db_req(Req, DbName) ->
+    Responses = spray_request(Req),
+    Errors = collect_errors(Responses, 201),
+    case Errors of
+    [] ->
+        DocUrl = absolute_uri(Req, "/" ++ DbName),
+        send_json(Req, 201, [{"Location", DocUrl}], {[{ok, true}]});
+    [Error | _OtherErrors] ->
+        Error
+    end.
+
+delete_db_req(Req, _DbName) ->
+    Responses = spray_request(Req),
+    Errors = collect_errors(Responses, 200),
+    case Errors of
+    [] ->
+        send_json(Req, 200, {[{ok, true}]});
+    [Error | _OtherErrors] ->
+        Error
     end.
 
 do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->
@@ -77,14 +98,51 @@ db_doc_req(#httpd{method='POST'}=Req, _Db, DocId) ->
 db_doc_req(#httpd{method='PUT'}=Req, _Db, DocId) ->
     proxy_req(Req, DocId).
 
+handle_all_dbs_req(#httpd{method='GET'}=Req) ->
+    Responses = spray_request(Req, list_nodes(), fun(_Req, Node) ->
+        rpc:call(Node, couch_server, all_databases, [])
+    end),
+    DbLists = lists:map(fun({ok, DbList}) ->
+        DbList
+    end, Responses),
+    DbNames = lists:umerge(DbLists),
+    send_json(Req, DbNames);
+handle_all_dbs_req(Req) ->
+    send_method_not_allowed(Req, "GET,HEAD").
+
 proxy_req(Req, DocId) ->
     Node = lookup_node(DocId),
     MochiReq = Req#httpd.mochi_req,
-    DistribMochiReq = distrib_mochiweb_request:new(node(), MochiReq),
+    DistribMochiReq = distrib_mochiweb_request:new(node(), MochiReq, false),
     rpc:call(Node, couch_httpd_db, handle_request, [Req#httpd{mochi_req=DistribMochiReq}]).
 
 lookup_node(_DocId) ->
     % Obviously this is a hack just for testing - need to integrate
     % chash or some other library for consistent hashing of docs to nodes
     couch1@macbook.
-    
+
+list_nodes() ->
+    % temporary hack, just like lookup_node
+    [couch1@macbook, couchspray@macbook].
+
+spray_request(Req) ->
+    spray_request(Req, list_nodes()).
+
+spray_request(Req, Nodes) ->
+    spray_request(Req, Nodes, fun(DistribReq, Node) ->
+        rpc:call(Node, couch_httpd_db, handle_request, [DistribReq])
+    end).
+
+spray_request(Req, Nodes, Function) ->
+    MochiReq = Req#httpd.mochi_req,
+    DistribMochiReq = distrib_mochiweb_request:new(node(), MochiReq, true),
+    lists:map(fun(Node) ->
+        Function(Req#httpd{mochi_req=DistribMochiReq}, Node)
+    end, Nodes).
+
+collect_errors(Responses, ExpectedStatus) ->
+    lists:filter(fun(Response) ->
+        {ok, {Status, _Headers, _Body}} = Response,
+        Status /= ExpectedStatus
+    end, Responses).
+

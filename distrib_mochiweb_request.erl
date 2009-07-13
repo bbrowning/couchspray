@@ -7,7 +7,7 @@
 %%% original author: Bob Ippolito x<bob@mochimedia.com>
 %%% original copyright 2007 Mochi Media, Inc.
 %%%-------------------------------------------------------------------
--module(distrib_mochiweb_request, [Node, MochiReq]).
+-module(distrib_mochiweb_request, [Node, MochiReq, ReturnResponse]).
 -author("ben324@gmail.com").
 
 -export([get_header_value/1, get_primary_header_value/1, get/1, dump/0]).
@@ -26,7 +26,8 @@
 %%       can just be executed locally (parse_qs is good example)
 
 get_header_value(K) ->
-    rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, get_header_value, [K]]).
+    MochiReq:get_header_value(K).
+    %rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, get_header_value, [K]]).
 
 get_primary_header_value(K) ->
     rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, get_primary_header_value, [K]]).
@@ -65,7 +66,12 @@ start_response_length(Params) ->
     rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, start_response_length, [Params]]).
 
 respond(Params) ->
-    rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, respond, [Params]]).
+    case ReturnResponse of
+    true ->
+        Params;
+    _Else ->
+        rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, respond, [Params]])
+    end.
 
 not_found() ->
     rpc:call(Node, mochiweb_rpc, do_rpc, [MochiReq, not_found, []]).
