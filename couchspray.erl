@@ -99,6 +99,8 @@ db_doc_req(#httpd{method='PUT'}=Req, _Db, DocId) ->
     proxy_req(Req, DocId).
 
 handle_all_dbs_req(#httpd{method='GET'}=Req) ->
+    % Shouldn't really call spray_request here since I'm not spraying
+    % HTTP requests - make another method for collecting results from all nodes
     Responses = spray_request(Req, list_nodes(), fun(_Req, Node) ->
         rpc:call(Node, couch_server, all_databases, [])
     end),
@@ -134,6 +136,7 @@ spray_request(Req, Nodes) ->
     end).
 
 spray_request(Req, Nodes, Function) ->
+    % TODO: This should be parallelized
     MochiReq = Req#httpd.mochi_req,
     DistribMochiReq = distrib_mochiweb_request:new(node(), MochiReq, true),
     lists:map(fun(Node) ->
