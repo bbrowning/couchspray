@@ -43,10 +43,10 @@ create_db_req(Req, DbName) ->
     Errors = collect_errors(Responses, 201),
     case Errors of
     [] ->
-        DocUrl = absolute_uri(Req, "/" ++ DbName),
+        DocUrl = absolute_uri(Req, "/" ++ couch_util:url_encode(DbName)),
         send_json(Req, 201, [{"Location", DocUrl}], {[{ok, true}]});
     [Error | _OtherErrors] ->
-        Error
+        throw(Error)
     end.
 
 delete_db_req(Req, _DbName) ->
@@ -191,7 +191,7 @@ collect_errors(Responses, ExpectedStatus) ->
         {ok, {Status, _Headers, _Body}} ->
             Status /= ExpectedStatus;
         _Error ->
-            false
+            true
         end
     end, Responses).
 
