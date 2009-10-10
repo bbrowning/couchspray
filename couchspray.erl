@@ -56,7 +56,7 @@ delete_db_req(Req, _DbName) ->
     [] ->
         send_json(Req, 200, {[{ok, true}]});
     [Error | _OtherErrors] ->
-        Error
+        throw(Error)
     end.
 
 do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->
@@ -72,9 +72,37 @@ do_db_req(#httpd{user_ctx=UserCtx,path_parts=[DbName|_]}=Req, Fun) ->
     end.
 
 db_req(#httpd{method='GET',path_parts=[_DbName]}=Req, Db) ->
-    % Dunno what to return for sharded databases
+    % DbInfo - combine results from all nodes
+    Responses = spray_db_request(Req, list_nodes(), fun(Node, RemoteDb) ->
+        rpc:call(Node, couch_db, get_db_info, [RemoteDb])
+    end),
+    DbInfos = lists:map(fun({ok, DbInfo}) ->
+        DbInfo
+    end, Responses),
+    SumInfo = fun(Key) ->
+        lists:foldl(fun(DbInfo, Sum) ->
+            {Key, Count} = lists:keyfind(Key, 1, DbInfo),
+            Count + Sum
+        end, 0, DbInfos)
+    end,
+    DocCount = SumInfo(doc_count),
+    DocDelCount = SumInfo(doc_del_count),
+    UpdateSeq = SumInfo(update_seq),
+    PurgeSeq = SumInfo(purge_seq),
+    DiskSize = SumInfo(disk_size),
     {ok, DbInfo} = couch_db:get_db_info(Db),
-    send_json(Req, {DbInfo});
+    CombinedInfo = [
+        lists:keyfind(db_name, 1, DbInfo),
+        {doc_count, DocCount},
+        {doc_del_count, DocDelCount},
+        {update_seq, UpdateSeq},
+        {purge_seq, PurgeSeq},
+        lists:keyfind(compact_running, 1, DbInfo),
+        {disk_size, DiskSize},
+        lists:keyfind(instance_start_time, 1, DbInfo),
+        lists:keyfind(disk_format_version, 1, DbInfo)
+    ],
+    send_json(Req, {CombinedInfo});
 
 db_req(#httpd{method='POST',path_parts=[DbName]}=Req, _Db) ->
     DocId = couch_util:new_uuid(),
@@ -143,9 +171,27 @@ spray_request(Req, Nodes, Function) ->
         Function(Req#httpd{mochi_req=DistribMochiReq}, Node)
     end, Nodes).
 
+spray_db_request(#httpd{path_parts=[DbName|_],user_ctx=UserCtx}=Req, Nodes, Function) ->
+    spray_request(Req, Nodes, fun(_Req, Node) ->
+        case rpc:call(Node, couch_db, open, [DbName, [{user_ctx, UserCtx}]]) of
+        {ok, RemoteDb} ->
+            try
+                Function(Node, RemoteDb)
+            after
+                catch rpc:call(Node, couch_db, close, [RemoteDb])
+            end;
+        Error ->
+            throw(Error)
+        end
+    end).
+
 collect_errors(Responses, ExpectedStatus) ->
     lists:filter(fun(Response) ->
-        {ok, {Status, _Headers, _Body}} = Response,
-        Status /= ExpectedStatus
+        case Response of
+        {ok, {Status, _Headers, _Body}} ->
+            Status /= ExpectedStatus;
+        _Error ->
+            false
+        end
     end, Responses).
 
