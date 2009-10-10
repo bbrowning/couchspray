@@ -17,7 +17,7 @@ to use couchspray for all http requests.
         default_handler = {couchspray, handle_request}
         [httpd_global_handlers]
         _all_dbs = {couchspray, handle_all_dbs_req}
-    ERL_LIBS="couchspray" utils/run -i
+    utils/run -i
 
 For Couchspray to be useful, you need to start a second CouchDB node.
 Check out CouchDB trunk and Couchspray to another directory and
@@ -25,7 +25,7 @@ start as before, but this time don't modify the http request handler.
 
     erlc couchspray/*.erl
     make dev
-    ERL_LIBS="couchspray" utils/run -i
+    utils/run -i
 
 Right now Couchspray is hardcoded to send all requests to 'couch1@macbook'.
 It also expects your Couches to be started in distributed mode. I need to
